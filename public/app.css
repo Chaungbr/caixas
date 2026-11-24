@@ -454,4 +454,13 @@ textarea.inp { height: auto; min-height: 84px; padding: 10px 12px; resize: verti
   .hbar, .pv { grid-template-columns: minmax(80px, 110px) minmax(0, 1fr) auto; gap: 8px; }
   .boxes { grid-template-columns: minmax(0, 1fr); }
 }
+/* iPhone: respeita o entalhe e a barra inferior quando aberto pela Tela de Início */
+@supports (padding: env(safe-area-inset-top)) {
+  .top { padding-top: max(10px, env(safe-area-inset-top)); }
+  .side { padding-top: max(18px, env(safe-area-inset-top)); padding-bottom: max(18px, env(safe-area-inset-bottom)); }
+  .page { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+  .auth-r { padding-top: max(32px, env(safe-area-inset-top)); }
+}
+input, select, textarea { font-size: max(16px, 1em); } /* evita o zoom automático do iPhone ao tocar em campos */
+.inp.sm { font-size: 16px; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

@@ -70,17 +70,27 @@
     const mut = method !== 'GET';
     if (mut) { S.pending++; setSaving('busy'); }
     try {
-      const r = await fetch(url, { method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Caixas': '1' }, body: body ? JSON.stringify(body) : undefined });
-      const data = (r.headers.get('content-type') || '').includes('json') ? await r.json() : await r.text();
-      if (r.status === 401 && !url.startsWith('/api/auth')) { S.me = null; closeAllModals(); render(); throw new Error(data.error || 'Sessão expirada.'); }
-      if (!r.ok) throw new Error((data && data.error) || 'Não foi possível concluir a operação.');
+      // Tudo roda no aparelho: a "API" é local (local-api.js) e salva no armazenamento do navegador.
+      const data = window.LocalAPI.call(method, url, body ? JSON.parse(JSON.stringify(body)) : undefined);
       if (mut) { S.pending--; if (!S.pending) setSaving('ok'); }
       return data;
     } catch (e) {
       if (mut) { S.pending = Math.max(0, S.pending - 1); setSaving('err'); }
-      if (e instanceof TypeError) throw new Error('Sem conexão com o servidor.');
-      throw e;
+      if (!(e instanceof window.LocalAPI.HttpError)) console.error(e);
+      throw new Error(e instanceof window.LocalAPI.HttpError ? e.message : 'Erro inesperado. Tente novamente.');
     }
+  }
+  function download(filename, text, type) {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = filename;
+    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+  function exportCsv(kind, ym) { download(`caixas-${kind}${ym ? '-' + ym : ''}.csv`, window.LocalAPI.exportCsv(kind, ym || null), 'text/csv;charset=utf-8'); }
+  const csvBtn = (kind, ym, label = 'Baixar', cls = 'btn sm') => `<button type="button" class="${cls}" data-act="csv" data-kind="${kind}" data-ym="${ym || ''}">${icon('download')}${label}</button>`;
+  const lastBackup = () => { try { return localStorage.getItem('caixas_last_backup') || ''; } catch (e) { return ''; } };
+  function backupNow() {
+    download(`caixas-backup-${todayISO()}.json`, window.LocalAPI.exportBackup(), 'application/json');
+    try { localStorage.setItem('caixas_last_backup', todayISO()); } catch (e) { /* */ }
+    toast('Backup gerado — guarde o arquivo no app Arquivos ou no iCloud Drive');
   }
   async function loadView() { S.view = await api('GET', `/api/month/${S.ym}`); return S.view; }
 
@@ -158,10 +168,9 @@
 
   // ───────────────────────────── Render raiz ─────────────────────────────
   const root = $('#root');
-  function render() { if (!S.me) return renderAuth(); renderShell(); renderPage(true); }
+  function render() { if (!S.me || !S.me.name) return renderAuth(); renderShell(); renderPage(true); }
 
   function renderAuth() {
-    const login = S.authMode === 'login';
     const demo = (name, ic, color, type, val, used, tot) => `<div class="box" style="--c:${color}"><div class="box-h"><div class="ico-tile" style="background:${tint(color)};color:${color}">${icon(ic)}</div><div><div class="nm">${name}</div><div class="tp">${type}</div></div></div><div class="saldo"><span class="v">${val}</span></div><div class="prog"><span style="width:${(used / tot) * 100}%;background:${color}"></span></div></div>`;
     root.innerHTML = `<div class="auth">
       <div class="auth-l">
@@ -170,21 +179,18 @@
         <div class="auth-demo">${demo('Alimentação', 'cart', '#1baf7a', 'Consumo', 'R$ 640,00 disponíveis', 3, 8)}${demo('Reserva financeira', 'piggy', '#008300', 'Acumulação', 'R$ 12.400,00', 6, 8)}</div>
       </div>
       <div class="auth-r"><form class="auth-form form" id="authForm" novalidate>
-        <div><h2>${login ? 'Entrar' : 'Criar conta'}</h2><p class="sub">${login ? 'Acesse seu planejamento financeiro.' : 'Seus dados ficam isolados e protegidos na sua conta.'}</p></div>
-        ${login ? '' : tField('name', 'Nome', '', { attrs: 'autocomplete="name" required' })}
-        ${tField('email', 'E-mail', '', { type: 'email', attrs: 'autocomplete="email" required' })}
-        ${tField('password', 'Senha', '', { type: 'password', hint: login ? '' : 'Mínimo de 8 caracteres.', attrs: `autocomplete="${login ? 'current-password' : 'new-password'}" required` })}
+        <div class="brand" style="padding:0 0 8px"><span class="brand-mark"></span>Caixas</div>
+        <div><h2>Bem-vindo</h2><p class="sub">Funciona sem internet. Seus dados ficam guardados só neste aparelho.</p></div>
+        ${tField('name', 'Como você quer ser chamado?', '', { attrs: 'autocomplete="given-name" required maxlength="80"' })}
         <div class="err-box hide"></div>
-        <button class="btn primary" type="submit">${login ? 'Entrar' : 'Criar conta'}</button>
-        <div class="auth-switch">${login ? 'Ainda não tem conta? <a data-act="auth-mode">Criar conta</a>' : 'Já tem conta? <a data-act="auth-mode">Entrar</a>'}</div>
+        <button class="btn primary" type="submit">Começar</button>
+        <div class="auth-switch">Já usa o Caixas? <a data-act="backup-restore">Restaurar um backup</a></div>
       </form></div></div>`;
     const f = $('#authForm');
     f.addEventListener('submit', async (e) => {
       e.preventDefault(); const err = f.querySelector('.err-box'); err.classList.add('hide');
-      const btn = f.querySelector('button[type=submit]'); btn.disabled = true;
-      try { await api('POST', `/api/auth/${login ? 'login' : 'register'}`, formData(f)); await boot(); }
+      try { await api('PUT', '/api/me', { name: formData(f).name }); await boot(); }
       catch (ex) { err.textContent = ex.message; err.classList.remove('hide'); }
-      finally { btn.disabled = false; }
     });
     setTimeout(() => f.querySelector('input')?.focus(), 30);
   }
@@ -198,7 +204,7 @@
         <div class="side-foot">
           <button class="btn ghost" data-act="theme-cycle" style="justify-content:flex-start" id="themeBtn"></button>
           <div class="user-chip"><div class="avatar" id="avatar"></div><div><div class="nm" id="uName"></div><div class="em" id="uEmail"></div></div>
-            <button class="btn ghost icon sm" data-act="logout" title="Sair" aria-label="Sair">${icon('logout')}</button></div>
+            </div>
         </div>
       </aside>
       <div class="mobile-scrim" data-act="nav-close"></div>
@@ -332,7 +338,9 @@
       ...v.cards.filter((c) => !c.archived && !c.invoice.paid && c.invoice.total > 0 && !v.boxes.some((b) => b.card_id === c.id)).map((c) => ({ date: c.invoice.due_date, name: `Fatura ${c.name}`, amount: c.invoice.total, status: c.invoice.status, card: c })),
     ].sort((a, b) => (a.date || '9').localeCompare(b.date || '9'));
     const kpi = (l, val, sub = '', cls = '', ic = '') => `<div class="kpi ${cls}"><div class="l">${ic ? icon(ic) : ''}${l}</div><div class="v">${val}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
-    return `${closedBanner()}${prevHint}${noSalary}${alertsBlock(v.alerts)}
+    const lb = lastBackup(); const daysSince = lb ? Math.floor((Date.parse(todayISO()) - Date.parse(lb)) / 864e5) : null;
+    const backupHint = daysSince == null || daysSince >= 14 ? `<div class="banner">${icon('shield')}<div class="grow">${lb ? `Seu último backup foi há ${daysSince} dias.` : 'Você ainda não fez nenhum backup.'} Seus dados ficam só neste aparelho — guarde uma cópia no app Arquivos ou no iCloud Drive.</div><button class="btn sm" data-act="backup-now">${icon('download')}Fazer backup</button></div>` : '';
+    return `${closedBanner()}${prevHint}${noSalary}${backupHint}${alertsBlock(v.alerts)}
       <div class="kpis">
         <div class="kpi hero"><div><div class="l">Saldo financeiro atual</div><div class="v ${s.balance < 0 ? 'neg' : ''}">${money(s.balance)}</div></div>
           <div class="s">Dinheiro sob sua gestão: ${money(s.boxes_balance)} nas caixas + ${money(s.undistributed)} não distribuído</div></div>
@@ -462,7 +470,7 @@
           <div class="money-wrap" style="flex:1;min-width:180px"><input class="inp sm" style="padding-left:12px" placeholder="Buscar descrição, caixa ou cartão" value="${esc(f.q)}" data-mv="q"></div>
           <select class="inp sm" style="width:auto" data-mv="kind"><option value="">Todos os tipos</option>${['receita', 'gasto', 'pagamento', 'transferencia', 'reserva'].map((k) => `<option value="${k}" ${f.kind === k ? 'selected' : ''}>${KIND[k]}</option>`).join('')}</select>
           <select class="inp sm" style="width:auto" data-mv="box"><option value="">Todas as caixas</option>${allBoxes.map((b) => `<option value="${b.id}" ${f.box === String(b.id) ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}</select>
-          <a class="btn sm" href="/api/export/movimentacoes?ym=${S.ym}" download>${icon('download')}CSV</a>
+          ${csvBtn('movimentacoes', S.ym, 'CSV')}
         </div>
         ${items.length ? Object.entries(groups).map(([d, list]) => `<div class="day-h">${fdate(d)}</div><div class="list">${list.map(row).join('')}</div>`).join('') : `<div class="empty"><div class="ico-tile">${icon('list')}</div><h3>Nenhuma movimentação</h3><p>Registre gastos, transferências e receitas — tudo é salvo automaticamente.</p></div>`}
       </div></div>`;
@@ -616,18 +624,20 @@
       <div class="settings-sec"><div><h3>Exportar dados</h3><p>Arquivos CSV compatíveis com Excel e Planilhas (separador “;”, valores em reais).</p></div>
         <div style="display:flex;flex-direction:column;gap:8px;max-width:520px">
           ${[['movimentacoes', 'Movimentações', 'Distribuições, gastos, pagamentos e transferências'], ['receitas', 'Receitas', 'Salários e receitas extras'], ['caixas', 'Caixas do mês', `Situação de cada caixa em ${ymLabel(S.ym).toLowerCase()}`], ['cartoes', 'Compras no cartão', 'Todas as compras e parcelamentos']].map(([k, l, d]) =>
-            `<div class="row" style="border-top:1px solid var(--border)"><div class="grow"><div class="t">${l}</div><div class="d">${d}</div></div>${k === 'caixas' || k === 'cartoes' ? '' : `<a class="btn sm" href="/api/export/${k}?ym=${S.ym}" download>Mês atual</a>`}<a class="btn sm" href="/api/export/${k}${k === 'caixas' ? `?ym=${S.ym}` : ''}" download>${icon('download')}${k === 'caixas' ? 'Baixar' : 'Tudo'}</a></div>`).join('')}
+            `<div class="row" style="border-top:1px solid var(--border);flex-wrap:wrap"><div class="grow" style="min-width:180px"><div class="t">${l}</div><div class="d">${d}</div></div>${k === 'caixas' || k === 'cartoes' ? '' : csvBtn(k, S.ym, 'Mês atual')}${csvBtn(k, k === 'caixas' ? S.ym : '', k === 'caixas' ? 'Baixar' : 'Tudo')}</div>`).join('')}
         </div></div>
-      <div class="settings-sec"><div><h3>Segurança</h3><p>Alterar a senha encerra as outras sessões abertas.</p></div>
-        <form class="form" id="fPass" style="max-width:420px">${tField('current', 'Senha atual', '', { type: 'password', attrs: 'autocomplete="current-password"' })}${tField('next', 'Nova senha', '', { type: 'password', hint: 'Mínimo de 8 caracteres.', attrs: 'autocomplete="new-password"' })}<div class="btn-row"><button class="btn primary">Alterar senha</button><button type="button" class="btn" data-act="logout">${icon('logout')}Sair</button></div></form></div>
-      <div class="settings-sec"><div><h3>Excluir conta</h3><p>Remove permanentemente sua conta e todos os dados financeiros.</p></div><div><button class="btn danger" data-act="account-del">${icon('trash')}Excluir minha conta</button></div></div>
+      <div class="settings-sec"><div><h3>Backup</h3><p>Seus dados ficam só neste aparelho. Gere um backup de vez em quando e guarde no app Arquivos ou no iCloud Drive.</p></div>
+        <div style="display:flex;flex-direction:column;gap:10px;max-width:520px">
+          <div class="faint" style="font-size:13px">${lastBackup() ? `Último backup: ${fdate(lastBackup())}` : 'Nenhum backup feito ainda.'}</div>
+          <div class="btn-row"><button type="button" class="btn primary" data-act="backup-now">${icon('download')}Fazer backup agora</button><button type="button" class="btn" data-act="backup-restore">${icon('repeat')}Restaurar backup</button></div>
+        </div></div>
+      <div class="settings-sec"><div><h3>Apagar dados</h3><p>Remove permanentemente todos os dados deste aparelho.</p></div><div><button class="btn danger" data-act="reset-all">${icon('trash')}Apagar todos os dados</button></div></div>
     </div>`;
   };
   MOUNT.configuracoes = () => {
     const on = (id, fn) => { const f = $(id); f && f.addEventListener('submit', async (e) => { e.preventDefault(); try { await fn(formData(f), f); } catch (ex) { toast(ex.message, 'err'); } }); };
     on('#fProfile', async (d) => { const r = await api('PUT', '/api/me', { name: d.name }); S.me.name = r.name; updateShell(); toast('Perfil atualizado'); });
     on('#fSalary', async (d) => { const r = await api('PUT', '/api/me', { settings: { salary: needMoney(d.salary, 'Salário', { allowZero: true }), salary_day: Number(d.salary_day), salary_desc: d.salary_desc } }); S.me.settings = r.settings; toast('Salário padrão salvo'); });
-    on('#fPass', async (d, f) => { await api('PUT', '/api/me/password', d); f.reset(); toast('Senha alterada'); });
   };
 
   // ───────────────────────────── Formulários / fluxos ─────────────────────────────
@@ -937,14 +947,25 @@
         `<button type="button" class="btn" style="height:auto;padding:12px;justify-content:flex-start;text-align:left" data-act="${a}" data-closeparent><span class="ico-tile sm" style="background:var(--surface-2)">${icon(ic)}</span><span><span style="display:block">${t}</span><span class="faint" style="font-weight:400;font-size:12px">${d}</span></span></button>`).join('')}</div>` });
   }
   function exportMenu() {
-    modal({ title: 'Exportar CSV', noFoot: true, body: `<div class="list" style="padding-bottom:12px">${[['movimentacoes', 'Movimentações do mês', `?ym=${S.ym}`], ['movimentacoes', 'Todas as movimentações', ''], ['caixas', 'Caixas do mês', `?ym=${S.ym}`], ['receitas', 'Receitas (todas)', ''], ['cartoes', 'Compras no cartão', '']].map(([k, l, qs]) => `<div class="row"><div class="grow"><div class="t">${l}</div></div><a class="btn sm" href="/api/export/${k}${qs}" download>${icon('download')}Baixar</a></div>`).join('')}</div>` });
+    modal({ title: 'Exportar CSV', noFoot: true, body: `<div class="list" style="padding-bottom:12px">${[['movimentacoes', 'Movimentações do mês', S.ym], ['movimentacoes', 'Todas as movimentações', ''], ['caixas', 'Caixas do mês', S.ym], ['receitas', 'Receitas (todas)', ''], ['cartoes', 'Compras no cartão', '']].map(([k, l, qs]) => `<div class="row"><div class="grow"><div class="t">${l}</div></div>${csvBtn(k, qs)}</div>`).join('')}</div>` });
   }
 
   // ───────────────────────────── Ações (delegação) ─────────────────────────────
   const findBox = (id) => S.view.boxes.find((b) => b.id === Number(id));
   const ACT = {
-    'auth-mode': () => { S.authMode = S.authMode === 'login' ? 'register' : 'login'; renderAuth(); },
-    logout: async () => { await api('POST', '/api/auth/logout').catch(() => {}); S.me = null; S.view = null; closeAllModals(); render(); },
+    csv: (el) => exportCsv(el.dataset.kind, el.dataset.ym),
+    'backup-now': () => { backupNow(); if (S.route === 'configuracoes') renderPage(false); },
+    'backup-restore': () => {
+      const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json';
+      inp.onchange = async () => {
+        const f = inp.files && inp.files[0]; if (!f) return;
+        const text = await f.text();
+        if (S.me && S.me.has_data && !(await confirmDlg('Restaurar este backup? Os dados atuais deste aparelho serão substituídos pelos do arquivo.', { ok: 'Restaurar', danger: true }))) return;
+        try { window.LocalAPI.importBackup(text); toast('Backup restaurado'); await boot(); } catch (e) { toast(e.message, 'err'); }
+      };
+      inp.click();
+    },
+    'reset-all': async () => { if (await confirmDlg('Apagar <b>todos</b> os dados deste aparelho? Isso não pode ser desfeito. Se quiser, faça um backup antes.', { ok: 'Apagar tudo', danger: true, title: 'Apagar dados' })) { window.LocalAPI.resetAll(); closeAllModals(); S.view = null; await boot(); } },
     reload: () => renderPage(true),
     'nav-open': () => $('.app').classList.add('nav-open'), 'nav-close': () => $('.app').classList.remove('nav-open'),
     'month-prev': () => setYm(ymAdd(S.ym, -1)), 'month-next': () => setYm(ymAdd(S.ym, 1)), 'month-today': () => setYm(curYm()),
@@ -989,8 +1010,6 @@
     'month-close': closeMonthModal,
     'month-reopen': async () => { if (await confirmDlg(`Reabrir ${ymLabel(S.ym).toLowerCase()}? Os destinos escolhidos no fechamento serão desfeitos.`, { ok: 'Reabrir' })) run(() => api('POST', `/api/month/${S.ym}/reopen`), 'Mês reaberto'); },
     'cal-day': (el) => { S.calDay = el.dataset.d || null; renderPage(false); },
-    'account-del': () => modal({ title: 'Excluir conta', danger: true, submit: 'Excluir definitivamente', body: `<div class="form"><p class="muted" style="margin:0">Esta ação não pode ser desfeita. Todos os seus dados serão apagados. Confirme com sua senha.</p>${tField('password', 'Senha', '', { type: 'password' })}</div>`,
-      onSubmit: async (d) => { await api('DELETE', '/api/me', { password: d.password }); S.me = null; render(); } }),
   };
   document.addEventListener('click', (e) => {
     const el = e.target.closest('[data-act]'); if (!el) return;
