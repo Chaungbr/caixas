@@ -1,0 +1,13 @@
+{
+  "name": "caixas",
+  "version": "1.0.0",
+  "description": "Caixas — gerenciamento financeiro pessoal por caixinhas",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node --no-warnings server.js"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}
