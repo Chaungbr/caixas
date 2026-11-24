@@ -6,7 +6,7 @@
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const BRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
-  const money = (c) => BRL.format((c || 0) / 100);
+  const money = (c) => (S.hide ? 'R$ ••••' : BRL.format((c || 0) / 100));
   const moneyInput = (c) => (c ? (c / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
   const pct = (x) => `${Math.round((x || 0) * 100)}%`;
   function parseMoney(str) {
@@ -58,7 +58,7 @@
     configuracoes: { title: 'Configurações', icon: 'settings' },
   };
   let savedYm = null; try { savedYm = sessionStorage.getItem('caixas_ym'); } catch (e) { /* */ }
-  const S = { me: null, ym: /^\d{4}-\d{2}$/.test(savedYm || '') ? savedYm : curYm(), route: 'visao-geral', view: null, boxFilter: 'todas', cardSel: null, calDay: null, mv: { kind: '', box: '', q: '' }, authMode: 'login', pending: 0 };
+  const S = { me: null, ym: /^\d{4}-\d{2}$/.test(savedYm || '') ? savedYm : curYm(), route: 'visao-geral', view: null, boxFilter: 'todas', cardSel: null, calDay: null, mv: { kind: '', box: '', q: '' }, authMode: 'login', pending: 0, hide: (() => { try { return localStorage.getItem('caixas_hide') === '1'; } catch (e) { return false; } })() };
 
   // ───────────────────────────── API ─────────────────────────────
   function setSaving(state) {
@@ -228,6 +228,7 @@
     updateShell();
   }
   function updateShell() {
+    $('.app').dataset.route = S.route;
     $$('#nav a').forEach((a) => a.classList.toggle('on', a.dataset.route === S.route));
     $('#pageTitle').textContent = ROUTES[S.route].title;
     $('#uName').textContent = S.me.name; $('#uEmail').textContent = S.me.email; $('#avatar').textContent = initials(S.me.name);
@@ -323,6 +324,20 @@
   const PAGES = {};
   const MOUNT = {};
 
+  // Linha de lista no estilo "app de banco": ícone grande, nome, detalhe e valor.
+  function boxRow(b) {
+    const p = Math.min(Math.max(progOf(b), 0), 1);
+    const val = b.type === 'pagamento' ? b.planned : b.saldo;
+    const nItems = (b.items || []).length;
+    const sub = b.type === 'pagamento' ? (b.planned > 0 || b.paid ? `${nItems ? `${nItems} ${nItems === 1 ? 'item' : 'itens'} · ` : ''}${STATUS[b.status][0]}${b.due_date ? ` · vence ${fdateShort(b.due_date)}` : ''}` : 'Sem valor definido')
+      : b.type === 'meta' ? `${pct(b.target ? b.saldo / b.target : 0)} de ${money(b.target)}` : b.type === 'consumo' ? `${money(b.used)} usados de ${money(funds(b))}` : `Acumulado · ${money(b.reserved + b.tin)} no mês`;
+    return `<div class="lrow" data-act="box-open" data-id="${b.id}" tabindex="0">${tile(b, 'xl')}
+      <div class="grow"><div class="nm">${esc(b.name)}</div><div class="sub ${b.status === 'vencido' ? 'neg' : ''}">${sub}</div>
+        <div class="prog thin ${b.type === 'consumo' && progOf(b) > 1 ? 'over' : ''}"><span style="width:${p * 100}%;background:${b.color}"></span></div></div>
+      <div class="val ${val < 0 ? 'neg' : ''}">${money(val)}</div></div>`;
+  }
+  const circ = (act, ic, label) => `<button class="circ" data-act="${act}"><span>${icon(ic)}</span>${label}</button>`;
+
   PAGES['visao-geral'] = async () => {
     const v = S.view, s = v.summary;
     if (!v.boxes.length && !v.incomes.length && !v.other_boxes.length) {
@@ -337,58 +352,62 @@
       ...v.boxes.filter((b) => b.type === 'pagamento' && !b.paid && b.planned > 0).map((b) => ({ date: b.due_date, name: b.name, amount: b.planned, status: b.status, b })),
       ...v.cards.filter((c) => !c.archived && !c.invoice.paid && c.invoice.total > 0 && !v.boxes.some((b) => b.card_id === c.id)).map((c) => ({ date: c.invoice.due_date, name: `Fatura ${c.name}`, amount: c.invoice.total, status: c.invoice.status, card: c })),
     ].sort((a, b) => (a.date || '9').localeCompare(b.date || '9'));
-    const kpi = (l, val, sub = '', cls = '', ic = '') => `<div class="kpi ${cls}"><div class="l">${ic ? icon(ic) : ''}${l}</div><div class="v">${val}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
+    const kpi = (l, val, sub = '', cls = '') => `<div class="kpi ${cls}"><div class="l">${l}</div><div class="v">${val}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
     const lb = lastBackup(); const daysSince = lb ? Math.floor((Date.parse(todayISO()) - Date.parse(lb)) / 864e5) : null;
     const backupHint = daysSince == null || daysSince >= 14 ? `<div class="banner">${icon('shield')}<div class="grow">${lb ? `Seu último backup foi há ${daysSince} dias.` : 'Você ainda não fez nenhum backup.'} Seus dados ficam só neste aparelho — guarde uma cópia no app Arquivos ou no iCloud Drive.</div><button class="btn sm" data-act="backup-now">${icon('download')}Fazer backup</button></div>` : '';
-    return `${closedBanner()}${prevHint}${noSalary}${backupHint}${alertsBlock(v.alerts)}
-      <div class="kpis">
-        <div class="kpi hero"><div><div class="l">Saldo financeiro atual</div><div class="v ${s.balance < 0 ? 'neg' : ''}">${money(s.balance)}</div></div>
-          <div class="s">Dinheiro sob sua gestão: ${money(s.boxes_balance)} nas caixas + ${money(s.undistributed)} não distribuído</div></div>
-        <div class="kpi"><div class="l">Organização do salário</div><div class="v">${pct(s.organization)}</div><div class="prog" style="margin-top:10px"><span style="width:${Math.min(s.organization, 1) * 100}%;background:${s.organization > 1 ? 'var(--red)' : 'var(--green-soft)'}"></span></div></div>
-        ${kpi('Ainda não distribuído', `<span class="${s.undistributed < 0 ? 'neg' : ''}">${money(s.undistributed)}</span>`, s.undistributed > 0 ? '<a data-act="distribute" style="cursor:pointer;text-decoration:underline;text-underline-offset:2px">Distribuir agora</a>' : s.undistributed < 0 ? 'Distribuição acima dos recursos' : 'Tudo distribuído')}
-        ${kpi('Salário mensal', money(s.salary), v.incomes.filter((i) => i.kind === 'salario').map((i) => `Recebido em ${fdateShort(i.date)}`)[0] || 'Não registrado')}
-        ${kpi('Receitas extras', money(s.extras), s.carry_in ? `+ ${money(s.carry_in)} de sobras do mês anterior` : `${v.incomes.filter((i) => i.kind !== 'salario').length} lançamento(s)`)}
-        ${kpi('Receita total', money(s.total_income), 'Salário + extras + sobras')}
-        ${kpi('Distribuído nas caixas', money(s.distributed), `${v.boxes.filter((b) => b.reserved > 0).length} de ${v.boxes.length} caixas`)}
-        ${kpi('Contas pagas', `<span class="pos">${money(s.paid_total)}</span>`, `${v.boxes.filter((b) => b.type === 'pagamento' && b.paid).length} conta(s)`)}
-        ${kpi('Contas pendentes', `<span class="${s.pending_total ? 'warn' : ''}">${money(s.pending_total)}</span>`, s.overdue_count ? `<span class="neg">${s.overdue_count} vencida(s)</span>` : `${v.boxes.filter((b) => b.type === 'pagamento' && !b.paid && b.planned > 0).length} a pagar`)}
-        ${kpi('Gasto no mês', money(s.used_total), 'Gastos e pagamentos realizados')}
-        ${kpi('Saldo vindo de meses anteriores', money(s.opening_total), 'Reservas e metas preservadas')}
+    const orgCls = s.organization > 1 ? 'bad' : s.organization >= 0.999 ? 'ok' : 'neutral';
+    const paidN = v.boxes.filter((b) => b.type === 'pagamento' && b.paid).length;
+    const toPayN = v.boxes.filter((b) => b.type === 'pagamento' && !b.paid && b.planned > 0).length;
+    return `<section class="hero">
+        <button class="hero-l" data-act="toggle-hide" aria-label="${S.hide ? 'Mostrar valores' : 'Ocultar valores'}">Saldo financeiro atual ${icon(S.hide ? 'eyeoff' : 'eye')}</button>
+        <div class="hero-v ${s.balance < 0 ? 'neg' : ''}">${money(s.balance)}</div>
+        <span class="pill-tag ${orgCls}">${pct(s.organization)} do dinheiro organizado</span>
+        <div class="circles">${circ('salary', 'income', 'Salário')}${circ('expense', 'expense', 'Gasto')}${circ('transfer', 'transfer', 'Transferir')}${circ('distribute', 'split', 'Distribuir')}</div>
+      </section>
+      ${closedBanner()}${prevHint}${noSalary}${backupHint}${alertsBlock(v.alerts)}
+      <div class="sec-row"><h2>Não distribuído</h2><a data-act="distribute">Distribuir</a></div>
+      <div class="flat-card" data-act="distribute"><div class="l">Ainda sem destino</div><div class="v ${s.undistributed < 0 ? 'neg' : ''}">${money(s.undistributed)}</div>
+        <div style="margin-top:14px">${segBar(v.boxes, s.total_income, { legend: false })}</div></div>
+      <div class="grid g-main" style="margin-top:8px">
+        <div><div class="sec-row"><h2>Caixinhas</h2><a href="#/caixas">Ver todas</a></div>
+          <div class="lrows">${v.boxes.length ? v.boxes.map(boxRow).join('') : '<div class="empty"><p>Nenhuma caixa neste mês.</p></div>'}</div></div>
+        <div><div class="sec-row"><h2>Próximos compromissos</h2></div>
+          <div class="flat-list">${upcoming.length ? upcoming.slice(0, 7).map((u) => `<div class="row" ${u.b ? `data-act="box-open" data-id="${u.b.id}"` : 'data-act="goto" data-to="cartoes"'} style="cursor:pointer"><div class="grow"><div class="t">${esc(u.name)}</div><div class="d">${u.date ? `Vence ${fdate(u.date)}` : 'Sem vencimento'}</div></div><div style="text-align:right"><div class="amt">${money(u.amount)}</div>${statusBadge(u.status)}</div></div>`).join('') : `<div class="empty" style="padding:20px"><p style="margin:0">Nenhuma conta pendente neste mês.</p></div>`}</div></div>
       </div>
-      <div class="card" style="margin-top:16px"><div class="card-h"><h2>Distribuição do dinheiro</h2><span class="sub">${money(s.distributed)} de ${money(s.total_income)}</span><div class="r"><button class="btn sm" data-act="distribute">${icon('split')}Distribuir</button></div></div>
-        <div class="card-b">${segBar(v.boxes, s.total_income, { tall: true })}</div></div>
-      <div class="grid g-main" style="margin-top:16px">
-        <div class="card"><div class="card-h"><h2>Caixas do mês</h2><div class="r"><a class="btn sm ghost" href="#/caixas">Ver todas ${icon('right')}</a></div></div><div class="card-b">
-          ${v.boxes.length ? v.boxes.map((b) => `<div class="mini-box" data-act="box-open" data-id="${b.id}">${tile(b, 'sm')}<div class="grow"><div class="top-l"><span class="nm">${esc(b.name)}</span><span class="num ${b.saldo < 0 ? 'neg' : ''}" style="font-weight:600">${money(b.type === 'pagamento' ? b.planned : b.saldo)}</span></div>
-            <div class="prog ${b.type === 'consumo' && progOf(b) > 1 ? 'over' : ''}"><span style="width:${Math.min(Math.max(progOf(b), 0), 1) * 100}%;background:${b.color}"></span></div></div>${b.type === 'pagamento' ? statusBadge(b.planned > 0 || b.paid ? b.status : null) : ''}</div>`).join('') : '<div class="empty"><p>Nenhuma caixa neste mês.</p></div>'}
-        </div></div>
-        <div style="display:flex;flex-direction:column;gap:16px">
-          <div class="card"><div class="card-h"><h2>Próximos compromissos</h2></div><div class="card-b"><div class="list">
-            ${upcoming.length ? upcoming.slice(0, 7).map((u) => `<div class="row" ${u.b ? `data-act="box-open" data-id="${u.b.id}" style="cursor:pointer"` : 'data-act="goto" data-to="cartoes" style="cursor:pointer"'}><div class="grow"><div class="t">${esc(u.name)}</div><div class="d">${u.date ? `Vence ${fdate(u.date)}` : 'Sem vencimento'}</div></div><div style="text-align:right"><div class="amt">${money(u.amount)}</div>${statusBadge(u.status)}</div></div>`).join('') : `<div class="empty" style="padding:20px"><p style="margin:0">Nenhuma conta pendente neste mês.</p></div>`}
-          </div></div></div>
-          <div class="card"><div class="card-h"><h2>Ações rápidas</h2></div><div class="card-b" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-            <button class="btn" data-act="salary">${icon('income')}Salário</button><button class="btn" data-act="income-new">${icon('plus')}Receita extra</button>
-            <button class="btn" data-act="expense">${icon('expense')}Gasto</button><button class="btn" data-act="transfer">${icon('transfer')}Transferir</button>
-            <button class="btn" data-act="purchase-new">${icon('card')}Compra no cartão</button><button class="btn" data-act="goto" data-to="planejamento">${icon('plan')}Planejar</button>
-          </div></div>
-        </div>
-      </div>`;
+      <div class="sec-row"><h2>Resumo do mês</h2></div>
+      <div class="kpis">
+        ${kpi('Salário mensal', money(s.salary), v.incomes.filter((i) => i.kind === 'salario').map((i) => `Recebido em ${fdateShort(i.date)}`)[0] || 'Não registrado')}
+        ${kpi('Receitas extras', money(s.extras), s.carry_in ? `+ ${money(s.carry_in)} de sobras` : `${v.incomes.filter((i) => i.kind !== 'salario').length} lançamento(s)`)}
+        ${kpi('Receita total', money(s.total_income), 'Salário + extras + sobras')}
+        ${kpi('Distribuído', money(s.distributed), `${v.boxes.filter((b) => b.reserved > 0).length} de ${v.boxes.length} caixas`)}
+        ${kpi('Contas pagas', `<span class="pos">${money(s.paid_total)}</span>`, `${paidN} conta(s)`)}
+        ${kpi('Contas pendentes', `<span class="${s.pending_total ? 'warn' : ''}">${money(s.pending_total)}</span>`, s.overdue_count ? `<span class="neg">${s.overdue_count} vencida(s)</span>` : `${toPayN} a pagar`)}
+        ${kpi('Gasto no mês', money(s.used_total), 'Gastos e pagamentos')}
+        ${kpi('Vindo de meses anteriores', money(s.opening_total), 'Reservas e metas')}
+      </div>
+      <div class="bottom-bar"><div><div class="v ${s.undistributed < 0 ? 'neg' : ''}">${money(s.undistributed)}</div><div class="l">Não distribuído</div></div><button class="pill" data-act="quick-add">${icon('plus')}Lançar</button></div>`;
   };
 
+  const GROUPS = { todas: () => true, usar: (b) => b.type === 'pagamento' || b.type === 'consumo', guardar: (b) => isPersistent(b.type) };
   PAGES.caixas = async () => {
-    const v = S.view; const f = S.boxFilter;
-    const list = v.boxes.filter((b) => f === 'todas' || b.type === f);
-    const counts = Object.fromEntries(Object.keys(TYPES).map((t) => [t, v.boxes.filter((b) => b.type === t).length]));
-    return `${closedBanner()}${alertsBlock(v.alerts.filter((a) => a.code === 'neg'))}
-      <div class="sec-h"><div class="type-tabs">
-        <button class="chip ${f === 'todas' ? 'on' : ''}" data-act="box-filter" data-f="todas">Todas <span class="n">${v.boxes.length}</span></button>
-        ${Object.entries(TYPES).map(([k, t]) => `<button class="chip ${f === k ? 'on' : ''}" data-act="box-filter" data-f="${k}">${t.label} <span class="n">${counts[k]}</span></button>`).join('')}
-      </div><div class="r faint" style="font-size:12.5px">${f === 'todas' && list.length > 1 ? `${icon('grip')} Arraste pelo ícone para reorganizar` : ''}</div></div>
-      <div class="boxes" id="boxGrid">${list.map((b) => boxCard(b, { drag: f === 'todas' })).join('')}
-        <button class="box add" data-act="box-new">${icon('plus')}<span>Nova caixa</span></button></div>
-      ${v.other_boxes.length ? `<div class="sec-h"><h2>Caixas fora deste mês</h2><span class="sub">Caixas avulsas ou não recorrentes que não estão em ${ymLabel(S.ym).toLowerCase()}</span></div>
-        <div class="card"><div class="card-b"><div class="list">${v.other_boxes.map((b) => `<div class="row">${tile(b, 'sm')}<div class="grow"><div class="t">${esc(b.name)}</div><div class="d">${TYPES[b.type].label}</div></div><button class="btn sm" data-act="box-add-month" data-id="${b.id}">${icon('plus')}Adicionar ao mês</button></div>`).join('')}</div></div></div>` : ''}`;
+    const v = S.view; const f = GROUPS[S.boxFilter] ? S.boxFilter : 'todas';
+    const list = v.boxes.filter(GROUPS[f]);
+    const total = list.reduce((a, b) => a + b.saldo, 0);
+    const seg = (k, l) => `<button class="${f === k ? 'on' : ''}" data-act="box-filter" data-f="${k}">${l}</button>`;
+    const heroL = f === 'guardar' ? 'Guardado nas caixas' : f === 'usar' ? 'Disponível para usar' : 'Total nas caixas';
+    const heroS = f === 'usar' ? 'Contas a pagar e gastos do mês' : f === 'guardar' ? 'Reservas e metas — o saldo segue para os próximos meses' : `${list.length} caixas em ${ymLabel(S.ym).toLowerCase()}`;
+    return `<div class="segm">${seg('todas', 'Todas')}${seg('usar', 'Usar')}${seg('guardar', 'Guardar')}</div>
+      <div class="hero compact"><div class="hero-l" style="cursor:default">${heroL}</div><div class="hero-v ${total < 0 ? 'neg' : ''}">${money(total)}</div><span class="faint" style="font-size:13px">${heroS}</span></div>
+      ${closedBanner()}${alertsBlock(v.alerts.filter((a) => a.code === 'neg'))}
+      <div class="lrows only-mobile">${list.map(boxRow).join('') || '<div class="empty"><p>Nenhuma caixa aqui.</p></div>'}</div>
+      <div class="only-desktop"><div class="sec-row"><span></span><span class="faint" style="font-size:12.5px">${f === 'todas' && list.length > 1 ? `${icon('grip')} Arraste pelo ícone para reorganizar` : ''}</span></div>
+        <div class="boxes" id="boxGrid">${list.map((b) => boxCard(b, { drag: f === 'todas' })).join('')}
+        <button class="box add" data-act="box-new">${icon('plus')}<span>Nova caixa</span></button></div></div>
+      ${v.other_boxes.length ? `<div class="sec-row"><h2>Fora deste mês</h2></div>
+        <div class="flat-list">${v.other_boxes.map((b) => `<div class="row">${tile(b, 'sm')}<div class="grow"><div class="t">${esc(b.name)}</div><div class="d">${TYPES[b.type].label}</div></div><button class="btn sm" data-act="box-add-month" data-id="${b.id}">${icon('plus')}Adicionar</button></div>`).join('')}</div>` : ''}
+      <div class="bottom-bar"><div><div class="v">${money(v.summary.undistributed)}</div><div class="l">Não distribuído</div></div><button class="pill" data-act="box-new">Criar nova</button></div>`;
   };
+
   MOUNT.caixas = () => initDrag();
 
   PAGES.cartoes = async () => {
@@ -506,7 +525,7 @@
       <div class="card"><div class="card-b"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Caixa</th><th>Modalidade</th><th class="r" style="width:150px">Planejado</th><th class="r">Reservado</th><th class="r">Realizado</th><th class="r">Diferença</th><th class="r">Saldo</th></tr></thead><tbody>
         ${v.boxes.map((b) => { const exec = isPersistent(b.type) ? b.reserved + b.tin - b.tout : b.used; const diff = b.planned - exec;
           return `<tr><td><div class="cell-box">${tile(b, 'sm')}<span style="font-weight:550">${esc(b.name)}</span>${b.recurring ? `<span title="Recorrente" class="faint">${icon('repeat')}</span>` : ''}</div></td><td class="faint">${TYPES[b.type].label}</td>
-          <td class="r">${b.card_id ? `<span title="Valor da fatura vinculada" class="faint">${money(b.planned)}</span>` : closed ? money(b.planned) : `<div class="money-wrap"><input class="inp sm money" data-money inputmode="decimal" data-planned="${b.id}" value="${moneyInput(b.planned)}" placeholder="0,00"></div>`}</td>
+          <td class="r">${b.card_id || (b.items || []).length ? `<span title="${b.card_id ? 'Valor da fatura vinculada' : 'Soma dos itens da conta'}" class="faint">${money(b.planned)}</span>` : closed ? money(b.planned) : `<div class="money-wrap"><input class="inp sm money" data-money inputmode="decimal" data-planned="${b.id}" value="${moneyInput(b.planned)}" placeholder="0,00"></div>`}</td>
           <td class="r">${money(b.reserved)}</td><td class="r">${money(exec)}</td><td class="r ${diff < 0 ? 'neg' : diff > 0 ? 'faint' : ''}">${diff === 0 ? '—' : (diff > 0 ? '' : '−') + money(Math.abs(diff))}</td><td class="r ${b.saldo < 0 ? 'neg' : ''}" style="font-weight:600">${money(b.saldo)}</td></tr>`; }).join('')}
       </tbody><tfoot><tr><td colspan="2">Total</td><td class="r">${money(s.planned_total)}</td><td class="r">${money(s.distributed)}</td><td class="r">${money(v.boxes.reduce((a, b) => a + (isPersistent(b.type) ? b.reserved + b.tin - b.tout : b.used), 0))}</td><td></td><td class="r">${money(s.boxes_balance)}</td></tr></tfoot></table></div>
       <div class="faint" style="font-size:12px;margin-top:10px">Para Acumulação e Meta, “realizado” é o aporte do mês; para Pagamento e Consumo, o valor efetivamente gasto.</div></div></div>
@@ -649,7 +668,7 @@
     const body = `<div class="form">
       ${tField('name', 'Nome da caixa', b.name, { attrs: 'maxlength="60" placeholder="Ex.: Alimentação" autofocus' })}
       <div class="field"><label>Modalidade</label><div class="seg-ctl">${Object.entries(TYPES).map(([k, t]) => `<label><input type="radio" name="type" value="${k}" ${b.type === k ? 'checked' : ''}><span class="t">${icon(t.icon)}${t.label}</span><span class="d">${t.desc}</span></label>`).join('')}</div></div>
-      <div class="r2">${mField('planned', `Valor planejado em ${MONTHS[Number(S.ym.slice(5)) - 1].toLowerCase()}`, b.planned_manual ?? b.planned, { hint: '' })}${mField('default_planned', 'Valor padrão (meses seguintes)', b.default_planned, { hint: 'Usado nas caixas recorrentes.' })}</div>
+      <div class="r2">${mField('planned', `Valor planejado em ${MONTHS[Number(S.ym.slice(5)) - 1].toLowerCase()}`, b.planned_manual ?? b.planned, (b.items || []).length ? { hint: 'Calculado pela soma dos itens da conta.', attrs: 'disabled' } : { hint: '' })}${mField('default_planned', 'Valor padrão (meses seguintes)', b.default_planned, { hint: 'Usado nas caixas recorrentes.' })}</div>
       <label class="check"><input type="checkbox" name="recurring" ${b.recurring ? 'checked' : ''}><span>Caixa recorrente<span class="hint">Aparece automaticamente em todos os meses seguintes.</span></span></label>
       <div class="r2" data-show="pagamento">${tField('due_day', 'Dia de vencimento', b.due_day || '', { type: 'number', attrs: 'min="1" max="31" placeholder="Ex.: 10"' })}
         <div class="field"><label>Cartão vinculado</label><select class="inp" name="card_id"><option value="">Nenhum</option>${cards.map((c) => `<option value="${c.id}" ${b.card_id === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select><div class="hint">O valor planejado passa a ser o total da fatura.</div></div></div>
@@ -681,6 +700,61 @@
     });
   }
 
+  // Itens que compõem uma conta (caixas de Pagamento sem cartão vinculado).
+  function itemsSection(b, closed) {
+    if (b.type !== 'pagamento' || b.card_id) return '';
+    const items = b.items || []; const locked = closed || b.paid;
+    const rows = items.map((i) => `<div class="row"><div class="grow"><div class="t">${esc(i.description)}</div></div><div class="amt">${money(i.amount)}</div>
+      ${locked ? '' : `<div class="acts" style="opacity:1"><button type="button" class="btn ghost icon sm" data-act="item-edit" data-box="${b.id}" data-item="${i.id}" aria-label="Editar item">${icon('edit')}</button><button type="button" class="btn ghost icon sm" data-act="item-del" data-box="${b.id}" data-item="${i.id}" aria-label="Excluir item">${icon('trash')}</button></div>`}</div>`).join('');
+    return `<div class="sec-row" style="margin:22px 0 6px"><h2>Itens da conta</h2>${locked ? '' : `<span class="btn-row"><button type="button" class="btn sm" data-act="item-paste" data-box="${b.id}">${icon('copy')}Colar lista</button><button type="button" class="btn sm" data-act="item-add" data-box="${b.id}">${icon('plus')}Item</button></span>`}</div>
+      <div class="flat-list">${items.length ? `${rows}<div class="row"><div class="grow"><div class="t">Total</div></div><div class="amt" style="font-size:16px">${money(items.reduce((s, i) => s + i.amount, 0))}</div>${locked ? '' : '<div class="acts" style="opacity:0;width:64px"></div>'}</div>`
+        : `<div class="empty" style="padding:18px 0"><p style="margin:0">Detalhe o que compõe esta conta (ex.: compras, parcelas). O valor da conta passa a ser a soma dos itens.</p></div>`}</div>
+      ${b.paid && !closed ? '<div class="faint" style="font-size:12.5px;margin-top:6px">Conta paga: desfaça o pagamento para alterar os itens.</div>' : ''}`;
+  }
+  // Lê linhas como "SHEIN: 436,05" ou "Airbnb - R$ 130". Ignora a linha de total.
+  function parseItemList(text) {
+    const items = []; const bad = []; let total = null;
+    for (const raw of String(text).split(/\r?\n/)) {
+      const line = raw.trim(); if (!line) continue;
+      const m = line.match(/^(.*?)[\s:=–—-]*(?:R\$)?\s*(-?\d[\d.,]*)\s*$/i);
+      const desc = m ? m[1].replace(/[\s:=–—-]+$/, '').trim() : '';
+      const val = m ? parseMoney(m[2]) : NaN;
+      if (!m || !desc || !Number.isFinite(val) || val <= 0) { bad.push(line); continue; }
+      if (/^(total|soma)$/i.test(desc)) { total = val; continue; }
+      items.push({ description: desc, amount: val });
+    }
+    return { items, bad, total };
+  }
+  async function reopenBox(id) { closeAllModals(); await refresh(); boxDetail(id); }
+  function itemForm(boxId, item) {
+    modal({ title: item ? 'Editar item' : 'Novo item', submit: item ? 'Salvar' : 'Adicionar',
+      body: `<div class="form">${tField('description', 'Descrição', item ? item.description : '', { attrs: 'maxlength="120" placeholder="Ex.: SHEIN" autofocus' })}${mField('amount', 'Valor', item ? item.amount : 0)}</div>`,
+      onSubmit: async (d) => {
+        const p = { ym: S.ym, description: d.description, amount: needMoney(d.amount, 'Valor') };
+        if (item) await api('PUT', `/api/boxes/${boxId}/items/${item.id}`, p); else await api('POST', `/api/boxes/${boxId}/items`, p);
+        await reopenBox(boxId);
+      } });
+  }
+  function itemPasteForm(boxId) {
+    modal({ title: 'Colar lista de itens', submit: 'Adicionar itens', size: 'wide',
+      body: `<div class="form"><div class="field"><label>Uma linha por item: descrição e valor</label><textarea class="inp" name="text" rows="8" placeholder="SHEIN: 436,05&#10;TIKTOK SHOP: 86,10&#10;AIRBNB: 130&#10;total: 652,15" autofocus></textarea><div class="hint">A linha de “total” é usada só para conferir a soma.</div></div><div id="pastePrev"></div></div>`,
+      onOpen: (f) => {
+        const ta = f.querySelector('textarea');
+        const upd = () => {
+          const r = parseItemList(ta.value); const sum = r.items.reduce((s, i) => s + i.amount, 0);
+          $('#pastePrev', f).innerHTML = !ta.value.trim() ? '' : `<div class="alert ${r.bad.length || (r.total != null && r.total !== sum) ? 'warning' : 'info'}">${icon(r.bad.length ? 'alert' : 'check')}<div>
+            <b>${r.items.length} item(ns)</b> · soma ${money(sum)}${r.total != null ? (r.total === sum ? ' — confere com o total informado' : ` — <b>diferente</b> do total informado (${money(r.total)})`) : ''}
+            ${r.bad.length ? `<br>Linhas não entendidas: ${r.bad.map(esc).join(' · ')}` : ''}</div></div>`;
+        };
+        ta.addEventListener('input', upd);
+      },
+      onSubmit: async (d) => {
+        const r = parseItemList(d.text); if (!r.items.length) throw new Error('Nenhum item encontrado. Use o formato “descrição: valor”, um por linha.');
+        await api('POST', `/api/boxes/${boxId}/items`, { ym: S.ym, items: r.items });
+        toast(`${r.items.length} item(ns) adicionados`); await reopenBox(boxId);
+      } });
+  }
+
   async function boxDetail(id) {
     const b = S.view.boxes.find((x) => x.id === id); if (!b) return;
     const T = TYPES[b.type]; const closed = S.view.month.closed;
@@ -702,7 +776,7 @@
     const m = modal({
       title: `<span style="display:flex;align-items:center;gap:12px">${tile(b)}<span><span style="display:block">${esc(b.name)}</span><span class="faint" style="font-size:12.5px;font-weight:500">${T.label} · ${T.desc}</span></span></span>`,
       size: 'wide', noFoot: true,
-      body: `<div class="kv">${kv.map(([l, val]) => `<div><div class="l">${l}</div><div class="v ${l === 'Saldo' && val < 0 ? 'neg' : ''}">${money(val)}</div></div>`).join('')}</div>${special}
+      body: `<div class="kv">${kv.map(([l, val]) => `<div><div class="l">${l}</div><div class="v ${l === 'Saldo' && val < 0 ? 'neg' : ''}">${money(val)}</div></div>`).join('')}</div>${special}${itemsSection(b, closed)}
         <div class="btn-row" style="margin-top:16px">${closed ? '<span class="badge">'+icon('lock')+'Mês fechado</span>' : `
           ${b.type === 'pagamento' ? (b.paid ? `<button type="button" class="btn" data-act="box-unpay" data-id="${b.id}">Desfazer pagamento</button>` : `<button type="button" class="btn primary" data-act="box-pay" data-id="${b.id}">${icon('check')}Marcar como pago</button>`) : `<button type="button" class="btn primary" data-act="expense" data-box="${b.id}" data-closeparent>${icon('expense')}${isPersistent(b.type) ? 'Registrar retirada' : 'Registrar gasto'}</button>`}
           <button type="button" class="btn" data-act="distribute" data-focus="${b.id}" data-closeparent>${icon('split')}Ajustar reserva</button>
@@ -954,6 +1028,12 @@
   const findBox = (id) => S.view.boxes.find((b) => b.id === Number(id));
   const ACT = {
     csv: (el) => exportCsv(el.dataset.kind, el.dataset.ym),
+    'item-add': (el) => itemForm(Number(el.dataset.box)),
+    'item-paste': (el) => itemPasteForm(Number(el.dataset.box)),
+    'item-edit': (el) => { const b = findBox(el.dataset.box); itemForm(b.id, (b.items || []).find((i) => i.id === Number(el.dataset.item))); },
+    'item-del': async (el) => { const b = findBox(el.dataset.box); const it = (b.items || []).find((i) => i.id === Number(el.dataset.item)); if (!it) return;
+      if (await confirmDlg(`Excluir o item <b>${esc(it.description)}</b> (${money(it.amount)})?`, { ok: 'Excluir', danger: true })) { try { await api('DELETE', `/api/boxes/${b.id}/items/${it.id}`, { ym: S.ym }); await reopenBox(b.id); } catch (e) { toast(e.message, 'err'); } } },
+    'toggle-hide': () => { S.hide = !S.hide; try { localStorage.setItem('caixas_hide', S.hide ? '1' : '0'); } catch (e) { /* */ } renderPage(false); },
     'backup-now': () => { backupNow(); if (S.route === 'configuracoes') renderPage(false); },
     'backup-restore': () => {
       const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json';

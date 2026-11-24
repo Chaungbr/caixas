@@ -138,7 +138,8 @@
     const boxes = rows.map(({ bm, b }) => {
       const a = ctx.agg(b.id, ym); const opening = ctx.opening(b.id, ym);
       const card = b.card_id ? cardById.get(b.card_id) : null;
-      const planned = card ? card.invoice.total : bm.planned;
+      const items = bm.items || [];
+      const planned = card ? card.invoice.total : items.length ? sum(items, (i) => i.amount) : bm.planned;
       const paid = card ? card.invoice.paid : !!bm.paid;
       const due_date = card ? card.invoice.due_date : bm.due_date;
       let status = null;
@@ -147,7 +148,7 @@
         id: b.id, name: b.name, icon: b.icon, color: b.color, type: b.type, target: b.target, target_date: b.target_date,
         due_day: b.due_day, notes: b.notes, recurring: b.recurring, default_planned: b.default_planned, position: b.position,
         card_id: b.card_id, card_name: card ? card.name : null, archived: b.archived, start_ym: b.start_ym,
-        planned, planned_manual: bm.planned, opening, reserved: a.reserved, used: a.used, tin: a.tin, tout: a.tout,
+        planned, planned_manual: bm.planned, items: items.map((i) => ({ ...i })), opening, reserved: a.reserved, used: a.used, tin: a.tin, tout: a.tout,
         saldo: opening + a.reserved + a.tin - a.tout - a.used, paid, paid_at: card ? card.invoice.paid_at : bm.paid_at, due_date, status,
       };
     });
@@ -401,6 +402,35 @@
     if (DB.transactions.some((t) => (t.box_id === ex.id || t.to_box_id === ex.id) && t.ym === ym)) bad('A caixa possui movimentações neste mês. Remova-as antes de retirá-la do mês.');
     remove('box_months', (r) => r.box_id === ex.id && r.ym === ym); return { ok: true };
   });
+  // Itens de uma conta (ex.: compras que compõem um pagamento). O valor da conta passa a ser a soma dos itens.
+  function itemsCtx(params, body) {
+    const b = boxOwned(params.id); const ym = vYm(body.ym); assertOpen(ym); ensureMonth(ym);
+    if (b.type !== 'pagamento') bad('Itens só podem ser usados em caixas de Pagamento.');
+    if (b.card_id) bad('Esta caixa segue a fatura do cartão vinculado; lance as compras no cartão.');
+    addBoxToMonth(b, ym); const bm = bmOf(b.id, ym); bm.items = bm.items || [];
+    if (bm.paid) bad('Esta conta já foi paga. Desfaça o pagamento para alterar os itens.');
+    return { b, bm, sync: () => { if (bm.items.length) bm.planned = sum(bm.items, (i) => i.amount); } };
+  }
+  const itemBody = (it) => ({ description: vStr(it.description, 120, true, 'Descrição do item'), amount: vMoney(it.amount, { allowZero: false }) });
+  route('POST', '/api/boxes/:id/items', ({ params, body }) => {
+    const { bm, sync } = itemsCtx(params, body);
+    const list = Array.isArray(body.items) ? body.items : [body]; if (!list.length) bad('Nenhum item para adicionar.');
+    const parsed = list.map(itemBody);
+    for (const it of parsed) bm.items.push({ id: (DB.seq.items = (DB.seq.items || 0) + 1), ...it });
+    sync(); return { ok: true, added: parsed.length };
+  });
+  route('PUT', '/api/boxes/:id/items/:item', ({ params, body }) => {
+    const { bm, sync } = itemsCtx(params, body);
+    const it = bm.items.find((i) => i.id === Number(params.item)); if (!it) throw new HttpError(404, 'Item não encontrado.');
+    Object.assign(it, itemBody(body)); sync(); return { ok: true };
+  });
+  route('DELETE', '/api/boxes/:id/items/:item', ({ params, body }) => {
+    const { bm, sync } = itemsCtx(params, body);
+    const before = bm.items.length; bm.items = bm.items.filter((i) => i.id !== Number(params.item));
+    if (bm.items.length === before) throw new HttpError(404, 'Item não encontrado.');
+    if (bm.items.length) sync(); else bm.planned = 0; return { ok: true };
+  });
+
   route('GET', '/api/boxes/:id/history', ({ params }) => {
     const id = boxOwned(params.id).id;
     const transactions = DB.transactions.filter((t) => t.box_id === id || t.to_box_id === id).map(txView).sort(txSort).slice(0, 500);
