@@ -555,6 +555,10 @@ input, select, textarea { font-size: max(16px, 1em); } /* evita o zoom automáti
 .pill-tag.warnp { background: var(--amber-bg); color: var(--amber); }
 .app[data-route="caixa"] .btn.menu-btn { display: none !important; }
 .hero.compact .ico-tile.xl { margin-bottom: 2px; }
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 22px; }
+.duo .flat-card .l { display: flex; align-items: center; gap: 8px; }
+.duo .flat-card .l svg.i { width: 17px; height: 17px; }
+@media (max-width: 640px) { .duo { grid-template-columns: 1fr; } }
 
 </style>
   <script>
@@ -727,8 +731,13 @@ window.icon = (name, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" ari
     return { guardado, aberto, falta: Math.max(aberto - guardado, 0), sobra: Math.max(guardado - aberto, 0), open, count: es.length };
   }
   const sortedBoxes = () => [...DB.boxes].sort((a, b) => a.position - b.position || a.id - b.id);
+  // Cada dívida só é coberta pelo dinheiro guardado na própria caixinha (o da viagem não paga a Eloyse).
   function totals() {
-    return sortedBoxes().reduce((t, b) => { const s = stats(b.id); t.guardado += s.guardado; t.aberto += s.aberto; t.falta += s.falta; return t; }, { guardado: 0, aberto: 0, falta: 0 });
+    return sortedBoxes().reduce((t, b) => {
+      const s = stats(b.id); t.guardado += s.guardado; t.aberto += s.aberto; t.falta += s.falta;
+      if (s.aberto > 0) { t.coberto += Math.min(Math.max(s.guardado, 0), s.aberto); t.dividas.push(b); } else { t.reservas += s.guardado; t.outras.push(b); }
+      return t;
+    }, { guardado: 0, aberto: 0, falta: 0, coberto: 0, reservas: 0, dividas: [], outras: [] });
   }
   const boxById = (id) => DB.boxes.find((b) => b.id === Number(id));
 
@@ -831,10 +840,10 @@ window.icon = (name, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" ari
 
   function boxRow(b) {
     const s = stats(b.id); const p = s.aberto ? Math.min(s.guardado / s.aberto, 1) : s.guardado > 0 ? 1 : 0;
-    const sub = s.aberto ? (s.falta ? `Faltam ${money(s.falta)} de ${money(s.aberto)}` : `Tudo guardado · ${money(s.aberto)} a pagar`) : s.guardado ? 'Nada a pagar' : 'Vazia';
+    const sub = s.aberto ? (s.falta ? `Faltam ${money(s.falta)} de ${money(s.aberto)}` : `Tudo guardado · ${money(s.aberto)} a pagar`) : s.guardado ? 'Reserva · sem dívida' : 'Vazia';
     return `<div class="lrow" data-act="box-open" data-id="${b.id}" tabindex="0">${tile(b, 'xl')}
       <div class="grow"><div class="nm">${esc(b.name)}</div><div class="sub">${sub}</div>
-        <div class="prog thin"><span style="width:${Math.max(0, p) * 100}%;background:${s.aberto && !s.falta ? 'var(--green-soft)' : b.color}"></span></div></div>
+        ${s.aberto ? `<div class="prog thin"><span style="width:${Math.max(0, p) * 100}%;background:${!s.falta ? 'var(--green-soft)' : b.color}"></span></div>` : ''}</div>
       <div class="val ${s.guardado < 0 ? 'neg' : ''}">${money(s.guardado)}</div></div>`;
   }
   const circ = (act, ic, label, extra = '') => `<button class="circ" data-act="${act}" ${extra}><span>${icon(ic)}</span>${label}</button>`;
@@ -851,11 +860,16 @@ window.icon = (name, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" ari
         ${t.aberto ? `<span class="pill-tag ${t.falta ? 'warnp' : 'ok'}">${t.falta ? `Falta guardar ${money(t.falta)}` : 'Tudo já guardado'}</span>` : '<span class="pill-tag neutral">Nenhuma despesa a pagar</span>'}
         <div class="circles">${circ('deposit', 'income', 'Depositar')}${circ('expense', 'file', 'Nova despesa')}${circ('pay', 'check', 'Paguei')}${circ('box-new', 'plus', 'Nova caixinha')}</div>
       </section>${backupHint}
-      <div class="sec-row"><h2>Despesas a pagar</h2></div>
-      <div class="flat-card" style="cursor:default"><div class="l">Total que você precisa pagar</div><div class="v">${money(t.aberto)}</div>
-        ${t.aberto ? `<div class="prog" style="margin-top:14px;height:8px"><span style="width:${Math.min(t.guardado / t.aberto, 1) * 100}%;background:var(--green-soft)"></span></div><div class="faint" style="font-size:13px;margin-top:8px">${pct(Math.min(t.guardado / t.aberto, 1))} já guardado</div>` : ''}</div>
-      <div class="sec-row"><h2>Caixinhas</h2>${boxes.length ? '<a data-act="box-new">Criar nova</a>' : ''}</div>
-      <div class="lrows">${boxes.length ? boxes.map(boxRow).join('') : `<div class="empty"><div class="ico-tile">${icon('boxes')}</div><h3>Nenhuma caixinha</h3><p>Crie uma caixinha para cada fatura, pessoa ou conta que você precisa pagar.</p><button class="btn primary" data-act="box-new">${icon('plus')}Criar caixinha</button></div>`}</div>
+      <div class="duo">
+        <div class="flat-card" style="cursor:default"><div class="l">${icon('file')} Dívidas a pagar</div><div class="v">${money(t.aberto)}</div>
+          ${t.aberto ? `<div class="prog" style="margin-top:12px;height:8px"><span style="width:${(t.coberto / t.aberto) * 100}%;background:var(--green-soft)"></span></div>
+            <div class="faint" style="font-size:13px;margin-top:8px">${money(t.coberto)} guardado nas caixinhas delas · falta ${money(t.falta)}</div>` : '<div class="faint" style="font-size:13px;margin-top:6px">Nenhuma dívida em aberto</div>'}</div>
+        <div class="flat-card" style="cursor:default"><div class="l">${icon('piggy')} Guardado em reservas</div><div class="v">${money(t.reservas)}</div>
+          <div class="faint" style="font-size:13px;margin-top:6px">Caixinhas sem dívida (viagem, metas…). Não entra no pagamento das dívidas.</div></div>
+      </div>
+      ${boxes.length ? `${t.dividas.length ? `<div class="sec-row"><h2>Dívidas</h2><a data-act="box-new">Criar nova</a></div><div class="lrows">${t.dividas.map(boxRow).join('')}</div>` : ''}
+        <div class="sec-row"><h2>${t.dividas.length ? 'Reservas e outras' : 'Caixinhas'}</h2>${t.dividas.length ? '' : '<a data-act="box-new">Criar nova</a>'}</div><div class="lrows">${t.outras.map(boxRow).join('') || '<div class="faint" style="padding:8px 0">Nenhuma.</div>'}</div>`
+        : `<div class="empty"><div class="ico-tile">${icon('boxes')}</div><h3>Nenhuma caixinha</h3><p>Crie uma caixinha para cada fatura, pessoa ou conta que você precisa pagar.</p><button class="btn primary" data-act="box-new">${icon('plus')}Criar caixinha</button></div>`}
       <div class="bottom-bar"><div><div class="v">${money(t.falta)}</div><div class="l">Falta guardar</div></div><button class="pill" data-act="deposit">Depositar</button></div>`;
   };
 
