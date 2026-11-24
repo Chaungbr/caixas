@@ -527,7 +527,7 @@ input, select, textarea { font-size: max(16px, 1em); } /* evita o zoom automáti
   .bottom-bar .v { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
   .bottom-bar .l { font-size: 14px; color: var(--text-3); }
   .page { padding-bottom: calc(110px + env(safe-area-inset-bottom)); }
-  .app[data-route="visao-geral"] #topActs, .app[data-route="caixas"] #topActs { display: none; }
+  .app[data-route="inicio"] #topActs, .app[data-route="caixa"] #topActs { display: none; }
   .top { border-bottom: 0 !important; background: var(--bg); }
   .top h1 { font-size: 22px; font-weight: 700; }
   .flat-list { padding: 0 16px; }
@@ -537,3 +537,6 @@ input, select, textarea { font-size: max(16px, 1em); } /* evita o zoom automáti
   .circles { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; width: 100%; }
   .hero-v { font-size: 40px; }
 }
+.pill-tag.warnp { background: var(--amber-bg); color: var(--amber); }
+.app[data-route="caixa"] .btn.menu-btn { display: none !important; }
+.hero.compact .ico-tile.xl { margin-bottom: 2px; }
